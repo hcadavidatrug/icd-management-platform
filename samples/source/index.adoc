@@ -1,0 +1,141 @@
+= Interface Control Document (DaC proof of concept)
+
+This is a minimalist example of an ICD for a theoretical system, generated following an DaC philosophy.
+
+== Purpose
+
+== Versions history
+
+tagshistory::default[]
+
+== Reference documents
+
+references::default[]
+
+== Glossary
+
+glossary::default[]
+
+== System overview
+
+
+This is a system overview described using text-based diagram specifications that makes easier its maintenance and version control. Here you can use the 'acr' macro (for example, with the acronym acr:AIPS++[]) to automatically include its description on the document's glossary, based on the centralized glossary data source defined for the tool (at the moment the building process is configured with a data-source mock, with only a few acronyms). This will be extended to also include context-based definitions and abbreviations (linked to a proper terminology management systems). 
+
+In this document you can make use of the existing Asciidoctor plugins to create text-based diagrams, like the following ditaa diagram and PlantUML diagrams:
+
+[ditaa]
+----
+                   +-------------+
+                   | Asciidoctor |-------+
+                   |   diagram   |       |
+                   +-------------+       | PNG out
+                       ^                 |
+                       | ditaa in        |
+                       |                 v
+ +--------+   +--------+----+    /---------------\
+ |        | --+ Asciidoctor +--> |               |
+ |  Text  |   +-------------+    |   Beautiful   |
+ |Document|   |   !magic!   |    |    Output     |
+ |     {d}|   |             |    |               |
+ +---+----+   +-------------+    \---------------/
+     :                                   ^
+     |          Lots of work             |
+     +-----------------------------------+
+----
+
+
+[plantuml, target=diagram-classes, format=png]   
+----
+class BlockProcessor
+class DiagramBlock
+class DitaaBlock
+class PlantUmlBlock
+
+BlockProcessor <|-- DiagramBlock
+DiagramBlock <|-- DitaaBlock
+DiagramBlock <|-- PlantUmlBlock
+----
+
+== Interfacing details
+
+*Registry maps specifications*
+
+The following is a proof of concept of the Asciidoctor extensions that are being developed to allow a technical writer to specify a hardware interface (in this case, a registers map) following an industry standard like SystemRDL. The document building process take care of turning this specification into a readable document, and to generate the necessary artifacts to make the development of the software artifacts that require these specifications more straightforward.
+
+SystemRDL albeit being quite complete, has most of its elements optional. In order to fullfil the expected quality of the document, the building process would allow the process to include 'quality gates' that ensure the minimum elements required for the proper understanding of the system are included. The registers specifications can be defined inline using the [systemrdl] macro. For larger registry maps, the specifications can be maintained in separate files. In both cases, the details of any systax error are informed on the CI/CD platform's dashboard.
+
+Furthermore, it is worth noting that the platform is extensible, so further extensions for more specifications formalisms could be integrated with relative ease.
+
+== XK25 data randomisation module
+The data randomisation module is capable of receiving input data of a constant size over a UDP connection, replaces the input data with random data of the same size and outputs it on a UDP socket.
+
+=== Hardware connections
+The XK25 hardware module uses a standard EN 5007 Europlug for power and two standard 1GBit/s Ethernet connections with 1500 bytes payload per frame. The XK25 module can only use DHCP for auto-configuration of IP address, netmask and gateway. For security reasons the module cannot be manually configured.
+
+=== Operational concept
+Once the module is powered up and connected to Ethernet, it will:
+- Receive input data over UDP on port 12345.
+- Randomise the imput data in an unpredictable way.\
+- Provide the output data via stateless UDP on port 12346.
+
+==== Operational and Test modes
+The XK25 module can be configured via dip-switch 1 to run in test mode or in operations mode.
+
+===== Operational mode
+The operational mode enables the XK25 module to randomise input data at a rate of 1 GBit/s and the output data cannot be predicted.
+
+===== Test mode
+While in test mode, the XK25 module will copy the input data to the output data and provide thus bit-identical UDP payloads.
+
+==== Implementation
+[plantuml, target=diagram-operational-concept, format=png]   
+----
+XK25_UDP_input -> XK25: 1 UDP frame with exactly 1500 bytes of payload
+alt DIP switch Testing is on
+    XK25 -> XK25_UDP_output: Exact copy of payload
+else DIP switch Testing is off
+    XK25 -> XK25_Randomiser: Copy payload
+    group XK25_Randomiser
+        XK25_Randomiser_input -> FPGA: Copy input frame
+        XK25_Randomiser -> Clock: Start clock
+        FPGA -> FPGA: Clear output frame
+        loop 1500 times over input data
+            FPGA -> FPGA: Read next input 8-bit datum
+            FPGA -> Clock: Latch Entropy
+            Clock -> FPGA: Return 8-bit Entropy
+            FPGA -> FPGA: Randomise 8-bit datum with Entropy (Secret recipe!)
+            FPGA -> FPGA: Push back randomised 8-bit datum to output frame
+        end
+        FPGA -> XK25_Randomiser_output: Copy output frame
+        XK25_Randomiser -> Clock: Stop clock
+    XK25_Randomiser -> XK25: Copy output payload
+    XK25 -> XK25_UDP_output: Copy of payload
+    end
+end
+----
+
+=== XK25 FPGA register maps
+// The linter is following the language abomination what the US calls "English". Unfortunately this means that one has to misspell metre as "meter".
+This register map is 2 centimeters wide and references acr:INAF[context=LOFAR] in a lot of places since they are responsible for code that creates the bit-identical copy of the input frame.
+
+Note that the register map of the follow-up prject XK26 is not different.
+
+[systemrdl, name="XK25_FPGA_register_map"]
+-----
+addrmap tiny {
+    bigendian;
+    reg {
+        field {
+ 	        name="reg_aa";
+            sw=r;
+            hw=r;
+        } f1[16] = 0;
+
+        field {
+ 	        name="reg_bb";
+            sw=r;
+            hw=w;
+        } f2[16];
+    }REG1@0x2D;
+};
+-----
